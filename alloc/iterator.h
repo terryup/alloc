@@ -1,6 +1,13 @@
 #ifndef ITERATOR_H
 #define ITERATOR_H
 
+#include <cstring>          //  memmove
+#include <algorithm>        //  copy
+#include <stdexcept>        //  throw
+
+#include <utility>          //  pair
+
+
 //  迭代器所指的内容不能被修改, 只读且只能执行一次读操作    (1~4):p++, ++p, p->
 struct input_iterator_tag {};
 //  只写并且一次只能执行一次写操作
@@ -203,6 +210,183 @@ struct __type_traits {
    typedef __false_type    has_trivial_destructor;
    typedef __false_type    is_POD_type;
 };
+
+//  从first到last范围内的元素复制到从 result地址开始的内存
+template <class InputIterator, class ForwardIterator>
+inline ForwardIterator uninitialized_copy(InputIterator first, InputIterator last, ForwardIterator result)
+{
+    return __uninitialized_copy(first, last, result, value_type(result));
+} 
+
+//  针对const char*和const wchar*单独做了特例化
+//  直接调用c++的memmove操作, 毕竟这样的效率更加的高效
+inline char* uninitialized_copy(const char* first, const char* last, char* result)
+{
+    memmove(result, first, last - first);
+    return result + (last - first);
+}
+inline wchar_t* uninitialized_copy(const wchar_t* first, const wchar_t* last, wchar_t* result)
+{
+    memmove(result, first, sizeof(wchar_t) * (last - first));
+    return result + (last - first);
+}
+
+//  这个地方如果是POD类型的话那就直接调用std::copy，这样可以优化拷贝速度 
+template <class InputIterator, class ForwardIterator>
+inline ForwardIterator __uninitialized_copy(InputIterator first, InputIterator last, ForwardIterator result, __true_type)
+{
+    return std::copy(first, last, result);
+}
+
+template <class T1, class T2>
+inline void construct(T1* __p, const T2& val)
+{
+    new (__p) T(val);
+}
+
+//  这里如果不是POD类型就比较麻烦了，需要一个一个拷贝过来，由于我们这里把所有类型都设置为了非POD
+//  所以都会走到这
+template <class InputIterator, class ForwardIterator>
+inline ForwardIterator __uninitialized_copy(InputIterator first, InputIterator last, ForwardIterator result, __false_type)
+{
+    ForwardIterator cur = result;
+    try
+    {
+        //  这里只能循环一个一个拷贝过去范围是[first, last)
+        for (; first != last; ++first, ++cur)
+        {
+            //  在 construct 函数调用的过程中，
+            //  对象的内存被合适地初始化，而不是简单地复制原对象的值到新对象
+            construct(&*cur, *first);
+        }
+        //  它的值是输出迭代器范围 [result, result + (last - first)) 的尾后迭代器
+        return cur;
+    }
+    catch(...)
+    {
+        /*
+            这个地方如果在执行构造的过程中发生了异常
+            该操作会在异常处理机制下，析构构造成功的对象
+            因为 destroy 函数会依次析构从 result 到 cur 这个范围内的对象，
+            所以只有构造成功的对象才会被析构，而不会对尚未构造成功的对象执行析构
+            这种技巧可以确保已经构造成功的对象不会泄漏，同时也能正确处理构造过程中的异常
+        */
+        destroy(result, cur);
+        throw;
+    }
+}
+
+//  将指定数量的元素从源区间复制到目标区间。它的参数包括源区间的起始位置 
+//  first，需要复制的元素数量 n，以及目标区间的起始位置 result
+//  和上一个函数差不多，只不过实现方式不同
+template <class InputIterator, class Size, class ForwardIterator>
+inline std::pair<InputIterator, ForwardIterator> uninitialized_copy(InputIterator first, Size size, ForwardIterator result)
+{
+    //  根据iterator_category选择最优函数
+    return __uninitialized_copy_n(first, size, result, iterator_category(first));
+}
+
+template <class InputIterator, class Size, class ForwardIterator>
+inline std::pair<InputIterator, ForwardIterator> __uninitialized_copy_n(InputIterator first, Size size, ForwardIterator result, input_iterator_tag)
+{
+    ForwardIterator cur = result;
+    try
+    {
+        for (; size > 0; --size, ++first, ++cur)
+        {
+            construct(&*cur, *first);
+        }
+        return std::pair<InputIterator, ForwardIterator>(first, cur);
+    }
+    catch(...)
+    {
+        destroy(result, cur);
+        throw;
+    }
+}
+template <class RandomAccessIterator, class Size, class ForwardIterator>
+inline std::pair<RandomAccessIterator, ForwardIterator> __uninitialized_copy_n(RandomAccessIterator first, Size size, ForwardIterator result, random_access_iterator_tag)
+{
+    RandomAccessIterator last = first + size;
+    return std::make_pair(last, uninitialized_copy(first, last, result));
+}
+
+//  这个是吧[first,last)的值替换为X
+template <class ForwardIterator, class T>
+inline void uninitialized_fill(ForwardIterator first, ForwardIterator last, const T& X)
+{
+    __uninitialized_fill(first, last, X, value_type(first));
+}
+
+template <class ForwardIterator, class T1, class T2>
+inline void __uninitialized_fill(ForwardIterator first, ForwardIterator last,  const T1& X, T2*)
+{
+  typedef typename __type_traits<T2>::is_POD_type is_POD;
+  __uninitialized_fill_aux(first, last, X, is_POD());      
+}
+
+template <class ForwardIterator, class T>
+inline void __uninitialized_fill_aux(ForwardIterator first, ForwardIterator last,  const T& X, __true_type)
+{
+    std::fill(first, last, X);
+}
+template <class ForwardIterator, class T>
+inline void __uninitialized_fill_aux(ForwardIterator first, ForwardIterator last,  const T& X, __false_type)
+{
+    ForwardIterator cur = first;
+    try
+    {
+        for (; cur != last; ++cur)
+        {
+            construct(&*cur, X);
+        }
+    }
+    catch(...)
+    {
+        destroy(result, cur);
+        throw;
+    }
+}
+
+//  从first开始n 个元素填充成 x 值
+template <class ForwardIterator, class Size, class T>
+inline ForwardIterator uninitialized_fill_n(ForwardIterator first, Size size, const T& X)
+{
+    return __uninitialized_fill_n(first, size, X, value_type(first));
+}
+
+template <class ForwardIterator, class T1, class T2>
+inline ForwardIterator __uninitialized_fill_n(ForwardIterator first, ForwardIterator last,  const T1& X, T2*)
+{
+    typedef typename __type_traits<T2>::is_POD_type is_POD;
+    return __uninitialized_fill_n_aux(first, n, X, is_POD())
+}
+
+template <class ForwardIterator, class Size, class T>
+inline ForwardIterator __uninitialized_fill_n_aux(ForwardIterator first, Size n, const T& X, __true_type)
+{
+    return std::fill_n(first, n, X);
+}
+template <class ForwardIterator, class Size, class T>
+inline ForwardIterator __uninitialized_fill_n_aux(ForwardIterator first, Size n, const T& X, __false_type)
+{
+    ForwardIterator cur = first;
+    try
+    {
+        for (; n > 0; --n, ++cur)
+        {
+            construct(&*cur, x);
+        }
+        return cur;
+    }
+    catch(...)
+    {
+        destroy(result, cur);
+        throw;
+    }
+    
+}
+
 
 
 #endif
