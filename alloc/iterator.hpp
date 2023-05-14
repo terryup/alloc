@@ -5,7 +5,8 @@
 #include <algorithm>        //  copy
 #include <stdexcept>        //  throw
 
-#include <utility>          //  pair
+#include <utility>          //  pair    move
+
 
 
 //  迭代器所指的内容不能被修改, 只读且只能执行一次读操作    (1~4):p++, ++p, p->
@@ -43,6 +44,12 @@ template <class RandomAccessIterator, class Distance>
 inline void __Distance(RandomAccessIterator first, RandomAccessIterator last, Distance& n, random_access_iterator_tag)
 {
     n += last - first;
+}
+
+template <class InputIterator, class Distance>
+inline void distance(InputIterator first, InputIterator last, Distance& n)
+{
+    __Distance(first, last, n, iterator_category(first));
 }
 
 template <class T, class Distance>
@@ -151,51 +158,26 @@ inline typename iterator_traits<Iterator>::value_type* value_type(const Iterator
 }
 
 ////////////////////////////////////////////////////////////////
-//  第二个版本的, 接受两个迭代器, 并设法找出元素的类型. 通过__type_trais<> 找出最佳措施
-//  这个函数其实就是销毁first到last之间的对象，这里first和last是一个迭代器（可以理解为是一个指针）
-//  要摧毁他们两个指针之间所指向的对象，也就是first到last-1的这个距离，不包括last
-template <class ForwardIterator>
-inline void destroy(ForwardIterator first, ForwardIterator last) 
+//  第一个版本的destroy(), 接收指针
+////////////////////////////////////////////////////////////////
+template <class T>
+inline void destroy(T* pointer)
 {
-  __destroy(first, last, value_type(first));
+    pointer->~T();
 }
+
+//  用来在已分配的内存上构造对象
+template <class T1, class T2>
+inline void construct(T1* __p, const T2& val)
+{
+    new (__p) T1(val);
+}
+
+////////////////////////////////////////////////////////////////
+//  第二个版本的destroy(), 接受两个迭代器, 并设法找出元素的类型. 通过__type_trais<> 找出最佳措施
 ////////////////////////////////////////////////////////////////
 
-//  这个函数就是上面这个函数调用的，他其实就用到了萃取技术，
-//  分析这个迭代器所指向的对象他是POD还是non-trivial
-//  分别用__true_type和__false_type
-//  POD：可以理解为系统默认的类型，也就是int，char：这种类型不需要我们自己调用析构
-//  non-trivial：可以理解为我们自己class出来的类型：需要调用析构
-template <class ForwardIterator, class T>
-inline void __destroy(ForwardIterator first, ForwardIterator last, T*)
-{
-    typedef typename __type_traits<T>::has_trivial_destructor trivial_destructor;
-    __destroy_aux(first, last, trivial_destructor());
-}
-
-//  这里就是识别出来了这个迭代器所指向的类型是non-trivial的类型
-//  我们这里就需要一个一个的循环的去调用这些对象的析构函数
-template <class ForwardIterator>
-inline void __destroy_aux(ForwardIterator first, ForwardIterator last, __false_type) 
-{
-    for ( ; first < last; ++first)
-    {
-        /*
-            这个位置因为first它就是一个迭代器，其实也可以理解为它就是一个指针，
-            而我们在从first到*first的过程就是解引用的过程，而这里因为是获取了对象的本身
-            也就是迭代器所指对象的本身，所以解引用操作会返回这个对象，从而触发其析构函数的调用
-            当我们通过获取新的指针（即通过&*first获取原指针所指向的对象的指针）来访问对象时，
-            编译器会根据对象的类型，决定是否需要调用析构函数。如果对象的类型有析构函数，
-            那么获取新的指针时就会调用对象的析构函数，以保证对象的正确销毁。
-        */
-        destroy(&*first);
-    }
-}
-
-//  这个函数就是判断出来时POD类型，那就不需要调用析构函数
-template <class ForwardIterator> 
-inline void __destroy_aux(ForwardIterator, ForwardIterator, __true_type) {}
-
+//  这里两个__true_type、__false_type和__type_traits一定要放在上面，不然下面函数找不到他们
 struct __true_type {};
 struct __false_type {};
 
@@ -210,6 +192,61 @@ struct __type_traits {
    typedef __false_type    has_trivial_destructor;
    typedef __false_type    is_POD_type;
 };
+
+/*
+    这个位置bug
+    一定要在这里再次声明一下底下的destroy编译器不然找不到
+    这个位置看的顺序需要从底下的destroy往上看
+*/
+template <class ForwardIterator>
+inline void destroy(ForwardIterator first, ForwardIterator last);
+//  这里就是识别出来了这个迭代器所指向的类型是non-trivial的类型
+//  我们这里就需要一个一个的循环的去调用这些对象的析构函数
+template <class ForwardIterator>
+inline void __destroy_aux(ForwardIterator first, ForwardIterator last, __false_type) 
+{
+    for ( ; first < last; ++first)
+    {
+        /*
+            这个位置会调用第一个版本的destroy，然后一个一个析构
+        */
+        destroy(&*first);
+    }
+}
+
+//  这个函数就是判断出来时POD类型，那就不需要调用析构函数
+template <class ForwardIterator> 
+inline void __destroy_aux(ForwardIterator, ForwardIterator, __true_type) {}
+
+//  这个函数就是下面这个函数调用的，他其实就用到了萃取技术，
+//  分析这个迭代器所指向的对象他是POD还是non-trivial
+//  分别用__true_type和__false_type
+//  POD：可以理解为系统默认的类型，也就是int，char：这种类型不需要我们自己调用析构
+//  non-trivial：可以理解为我们自己class出来的类型：需要调用析构
+template <class ForwardIterator, class T>
+inline void __destroy(ForwardIterator first, ForwardIterator last, T*)
+{
+    typedef typename __type_traits<T>::has_trivial_destructor trivial_destructor;
+    __destroy_aux(first, last, trivial_destructor());
+}
+
+
+//  这个函数其实就是销毁first到last之间的对象，这里first和last是一个迭代器（可以理解为是一个指针）
+//  要摧毁他们两个指针之间所指向的对象，也就是first到last-1的这个距离，不包括last
+template <class ForwardIterator>
+inline void destroy(ForwardIterator first, ForwardIterator last) 
+{
+    __destroy(first, last, value_type(first));
+}
+
+
+template <class InputIterator, class ForwardIterator>
+inline ForwardIterator __uninitialized_copy_aux(InputIterator first, InputIterator last, ForwardIterator result, __true_type);
+template <class InputIterator, class ForwardIterator>
+inline ForwardIterator __uninitialized_copy_aux(InputIterator first, InputIterator last, ForwardIterator result, __false_type);
+template <class InputIterator, class ForwardIterator, class T>
+inline ForwardIterator __uninitialized_copy(InputIterator first, InputIterator last, ForwardIterator result, T*);
+
 
 //  从first到last范围内的元素复制到从 result地址开始的内存
 template <class InputIterator, class ForwardIterator>
@@ -231,23 +268,25 @@ inline wchar_t* uninitialized_copy(const wchar_t* first, const wchar_t* last, wc
     return result + (last - first);
 }
 
+template <class InputIterator, class ForwardIterator, class T>
+inline ForwardIterator __uninitialized_copy(InputIterator first, InputIterator last, ForwardIterator result, T*)
+{
+    typedef typename __type_traits<T>::is_POD_type is_POD;
+    return __uninitialized_copy_aux(first, last, result, is_POD());
+}
+
 //  这个地方如果是POD类型的话那就直接调用std::copy，这样可以优化拷贝速度 
 template <class InputIterator, class ForwardIterator>
-inline ForwardIterator __uninitialized_copy(InputIterator first, InputIterator last, ForwardIterator result, __true_type)
+inline ForwardIterator __uninitialized_copy_aux(InputIterator first, InputIterator last, ForwardIterator result, __true_type)
 {
     return std::copy(first, last, result);
 }
 
-template <class T1, class T2>
-inline void construct(T1* __p, const T2& val)
-{
-    new (__p) T(val);
-}
 
 //  这里如果不是POD类型就比较麻烦了，需要一个一个拷贝过来，由于我们这里把所有类型都设置为了非POD
 //  所以都会走到这
 template <class InputIterator, class ForwardIterator>
-inline ForwardIterator __uninitialized_copy(InputIterator first, InputIterator last, ForwardIterator result, __false_type)
+inline ForwardIterator __uninitialized_copy_aux(InputIterator first, InputIterator last, ForwardIterator result, __false_type)
 {
     ForwardIterator cur = result;
     try
@@ -275,6 +314,12 @@ inline ForwardIterator __uninitialized_copy(InputIterator first, InputIterator l
         throw;
     }
 }
+
+template <class InputIterator, class Size, class ForwardIterator>
+inline std::pair<InputIterator, ForwardIterator> __uninitialized_copy_n(InputIterator first, Size size, ForwardIterator result, input_iterator_tag);
+template <class RandomAccessIterator, class Size, class ForwardIterator>
+inline std::pair<RandomAccessIterator, ForwardIterator> __uninitialized_copy_n(RandomAccessIterator first, Size size, ForwardIterator result, random_access_iterator_tag);
+
 
 //  将指定数量的元素从源区间复制到目标区间。它的参数包括源区间的起始位置 
 //  first，需要复制的元素数量 n，以及目标区间的起始位置 result
@@ -311,6 +356,14 @@ inline std::pair<RandomAccessIterator, ForwardIterator> __uninitialized_copy_n(R
     return std::make_pair(last, uninitialized_copy(first, last, result));
 }
 
+template <class ForwardIterator, class T1, class T2>
+inline void __uninitialized_fill(ForwardIterator first, ForwardIterator last,  const T1& X, T2*);
+template <class ForwardIterator, class T>
+inline void __uninitialized_fill_aux(ForwardIterator first, ForwardIterator last,  const T& X, __true_type);
+template <class ForwardIterator, class T>
+inline void __uninitialized_fill_aux(ForwardIterator first, ForwardIterator last,  const T& X, __false_type);
+
+
 //  这个是吧[first,last)的值替换为X
 template <class ForwardIterator, class T>
 inline void uninitialized_fill(ForwardIterator first, ForwardIterator last, const T& X)
@@ -343,10 +396,17 @@ inline void __uninitialized_fill_aux(ForwardIterator first, ForwardIterator last
     }
     catch(...)
     {
-        destroy(result, cur);
+        destroy(first, cur);
         throw;
     }
 }
+
+template <class ForwardIterator, class Size, class T, class T1>
+inline ForwardIterator __uninitialized_fill_n(ForwardIterator first, Size n, const T& X, T1*);
+template <class ForwardIterator, class Size, class T>
+inline ForwardIterator __uninitialized_fill_n_aux(ForwardIterator first, Size n, const T& X, __true_type);
+template <class ForwardIterator, class Size, class T>
+inline ForwardIterator __uninitialized_fill_n_aux(ForwardIterator first, Size n, const T& X, __false_type);
 
 //  从first开始n 个元素填充成 x 值
 template <class ForwardIterator, class Size, class T>
@@ -355,11 +415,11 @@ inline ForwardIterator uninitialized_fill_n(ForwardIterator first, Size size, co
     return __uninitialized_fill_n(first, size, X, value_type(first));
 }
 
-template <class ForwardIterator, class T1, class T2>
-inline ForwardIterator __uninitialized_fill_n(ForwardIterator first, ForwardIterator last,  const T1& X, T2*)
+template <class ForwardIterator, class Size, class T, class T1>
+inline ForwardIterator __uninitialized_fill_n(ForwardIterator first, Size n, const T& X, T1*)
 {
-    typedef typename __type_traits<T2>::is_POD_type is_POD;
-    return __uninitialized_fill_n_aux(first, n, X, is_POD())
+    typedef typename __type_traits<T1>::is_POD_type is_POD;
+    return __uninitialized_fill_n_aux(first, n, X, is_POD());
 }
 
 template <class ForwardIterator, class Size, class T>
@@ -375,16 +435,28 @@ inline ForwardIterator __uninitialized_fill_n_aux(ForwardIterator first, Size n,
     {
         for (; n > 0; --n, ++cur)
         {
-            construct(&*cur, x);
+            construct(&*cur, X);
         }
         return cur;
     }
     catch(...)
     {
-        destroy(result, cur);
+        destroy(first, cur);
         throw;
     }
     
+}
+
+
+
+//  给两个迭代器的范围，填充value
+template<class Forward_iterator, class T>
+void fill(Forward_iterator first, Forward_iterator last, const T& value)
+{
+    for(;first!=last;first++)
+    {
+        *first=value;
+    }
 }
 
 

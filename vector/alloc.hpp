@@ -11,7 +11,6 @@
 typedef void(*HandlerFunc)();
 
 //  一级配置器
-template <int inst>
 class __malloc_alloc_template
 {
 private:
@@ -65,9 +64,8 @@ public:
 
 };
 
-template <int inst>
 //  分配失败时调用的函数，不断尝试申请内存并释放一部分已有内存，直到申请成功或者失败
-void* __malloc_alloc_template<inst>::oom_malloc(size_t size)
+void* __malloc_alloc_template::oom_malloc(size_t size)
 {
     while(1)
     {
@@ -89,9 +87,8 @@ void* __malloc_alloc_template<inst>::oom_malloc(size_t size)
     }
 }
 
-template <int inst>
 //  重新分配内存失败时调用的函数，不断尝试申请内存并释放一部分已有内存，直到申请成功或者失败
-void *__malloc_alloc_template<inst>::oom_realloc(void *p, size_t n)
+void *__malloc_alloc_template::oom_realloc(void *p, size_t n)
 {
     if (_handler == nullptr)
     {
@@ -108,10 +105,9 @@ void *__malloc_alloc_template<inst>::oom_realloc(void *p, size_t n)
     }
 }
 
-template <int inst>
-HandlerFunc __malloc_alloc_template<inst>::_handler = nullptr;
+HandlerFunc __malloc_alloc_template::_handler = nullptr;
 
-template<typename T>
+
 class __default_alloc_template
 {
 private:
@@ -150,25 +146,11 @@ private:
     static std::mutex _mtx;
 
 public:
-    using value_type = T;
 
     //  默认构造函数，使用noexcept说明不会抛出异常。
     constexpr __default_alloc_template() noexcept {}
     //  拷贝构造函数
     constexpr __default_alloc_template(const __default_alloc_template&) noexcept = default;
-    //  模板拷贝构造函数
-    template <class _Other>
-    constexpr __default_alloc_template(const __default_alloc_template<_Other>&) noexcept {}
-
-    //对象构造
-    void construct(T* __p, const T& val) {
-        new (__p) T(val);
-    }
-
-    //对象析构
-    void destory(T* __p) {
-        __p->~T();
-    }
 
 private:
     //  将bytes向上调整至8的倍数
@@ -301,7 +283,7 @@ private:
                 }
                 //  所有的 free list 中都没有可用内存块，只能使用一级分配器
                 _end_free = 0;
-                _start_free = (char*)__malloc_alloc_template<0>::allocate(__bytes_to_get);
+                _start_free = (char*)__malloc_alloc_template::allocate(__bytes_to_get);
             }
             _heap_size += __bytes_to_get;
             _end_free = _start_free + __bytes_to_get;
@@ -311,16 +293,14 @@ private:
 
 public:
     //  开辟内存的函数，申请大小为__n的内存空间，返回指向申请内存的指针
-    T* allocate(size_t __n)
+    static void* allocate(size_t __n)
     {
-        //  计算需要申请的内存空间的总大小
-        __n = __n * sizeof(T);
         void* __ret = 0;
 
         //  如果申请的内存空间超过了__MAX_BYTES（128B），使用第一级配置器
         if ((size_t)__MAX_BYTES < __n)
         {
-            __ret = __malloc_alloc_template<0>::allocate(__n);
+            __ret = __malloc_alloc_template::allocate(__n);
         }
             //  如果申请的内存空间小于等于_MAX_BYTES（128B），使用第二级配置器
         else
@@ -336,6 +316,7 @@ public:
             if (__result == 0)
             {
                 __ret = _refill(_round_up(__n));
+                return __ret;
             }
             //  如果当前位置已经挂载了内存块，直接取出内存块，并将free_list上移一位
             else {
@@ -344,17 +325,18 @@ public:
             }
         }
         //  返回指向申请内存的指针
-        return (T*)__ret;
+        return __ret;
     }
 
     //  释放内存
-    void deallocate(T* __p, size_t __n)
+    static void deallocate(void* __p, size_t __n)
     {
         //  判断内存块大小是否大于阈值_MAX_BYTES
         if ((size_t)__MAX_BYTES < __n)
         {
             //  大于阈值，调用一级配置器的deallocate函数释放内存
-            __malloc_alloc_template<0>::deallocate(__p);
+            __malloc_alloc_template::deallocate(__p);
+            return;
         }
             //  小于等于阈值
         else
@@ -375,7 +357,7 @@ public:
 
     //  内容扩充&缩容
     //  重新分配内存，将旧内存中的数据拷贝到新的内存中，同时释放旧内存
-    void *reallocate(void* __p, size_t __old_sz, size_t __new_sz)
+    static void *reallocate(void* __p, size_t __old_sz, size_t __new_sz)
     {
         void* __result;
         size_t __copy_sz;
@@ -383,7 +365,7 @@ public:
         //  如果旧内存和新内存的大小都大于_MAX_BYTES（128），则直接调用reallocate函数进行内存重分配
         if (__old_sz > (size_t)__MAX_BYTES && __new_sz > (size_t)__MAX_BYTES)
         {
-            return (__malloc_alloc_template<0>::reallocate(__p, __new_sz));
+            return (__malloc_alloc_template::reallocate(__p, __new_sz));
         }
 
         //  如果新旧内存的大小相同，则不需要进行内存操作，直接返回旧内存指针
@@ -409,23 +391,43 @@ public:
 
 };
 
-template<typename T>
-char* __default_alloc_template<T>::_start_free = nullptr;
+char* __default_alloc_template::_start_free = nullptr;
 
-template <typename T>
-char* __default_alloc_template<T>::_end_free = nullptr;
+char* __default_alloc_template::_end_free = nullptr;
 
-template <typename T>
-size_t __default_alloc_template<T>::_heap_size = 0;
+size_t __default_alloc_template::_heap_size = 0;
 
-template <typename T>
-typename  __default_alloc_template<T>::_Obj* volatile __default_alloc_template<T>::_free_list[__NFREELISTS]{
+typename  __default_alloc_template::_Obj* volatile __default_alloc_template::_free_list[__NFREELISTS]{
         nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr
 };
 
-template <typename T>
-std::mutex __default_alloc_template<T>::_mtx;
+std::mutex __default_alloc_template::_mtx;
 
+// 定义符合STL规格的配置器接口, 不管是一级配置器还是二级配置器都是使用这个接口进行分配的
+template<class T, class Alloc>
+class simple_alloc
+{
+public:
+    static T *allocate(size_t n)
+    {
+        return 0 == n ? 0 : (T*) Alloc::allocate(n * sizeof (T));
+    }
 
+    static T *allocate(void)
+    { 
+     return (T*) Alloc::allocate(sizeof (T)); 
+    }
+
+    static void deallocate(T *p, size_t n)
+    { 
+        if (0 != n) Alloc::deallocate(p, n * sizeof (T)); 
+    }
+
+    static void deallocate(T *p)
+    { 
+        Alloc::deallocate(p, sizeof (T)); 
+    }
+    
+};
 
 #endif
