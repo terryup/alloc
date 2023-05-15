@@ -1,6 +1,7 @@
 #include "vector.hpp"
 
 #include <iostream>
+#include <string>
 
 int main()
 {
@@ -36,6 +37,15 @@ int main()
         v1.~vector();
 	}
 
-	
+	vector<std::string>st;
+
+	std::string str = "helloheeloheelo";
+
+	for (int i = 0; i < 10000000; ++i)
+	{
+		st.push_back(str);
+	}
+
+	std::cout << st[1] << std::endl;
 
 }
